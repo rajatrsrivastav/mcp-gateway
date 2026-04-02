@@ -289,6 +289,20 @@ deploy-example: install-crd ## Deploy example MCPServerRegistration resource
 	@echo "Waiting for broker-router to be ready..."
 	@kubectl wait --for=condition=Available deployment/$(BROKER_ROUTER_NAME) -n mcp-system --timeout=$(WAIT_TIME)
 
+# Deploy example MCPServerRegistration for everything server only
+deploy-example-minimal: install-crd ## Deploy MCPServerRegistration for everything server
+	@echo "Waiting for everything server to be ready..."
+	@kubectl wait --for=condition=Available deployment -n mcp-test -l app=everything-server --timeout=$(WAIT_TIME)
+	@echo "Deploying MCPServerRegistration for everything server..."
+	kubectl apply -f config/samples/mcpserverregistration-everything-server.yaml
+	@echo "Waiting for MCPServerRegistration to be ready..."
+	@kubectl wait --for=condition=Ready mcpserverregistration/everything-server -n mcp-test --timeout=$(WAIT_TIME)
+
+# Build everything server image only
+build-everything-server: ## Build everything server Docker image
+	@echo "Building everything server image..."
+	cd tests/servers/everything-server && $(CONTAINER_ENGINE) build $(CONTAINER_ENGINE_EXTRA_FLAGS) -t ghcr.io/kuadrant/mcp-gateway/test-everything-server:latest .
+
 # Build test server Docker images
 build-test-servers: ## Build test server Docker images locally
 	@echo "Building test server images..."
@@ -321,16 +335,25 @@ kind-load-test-servers: kind build-test-servers ## Load test server images into 
 	$(call load-image,ghcr.io/kuadrant/mcp-gateway/test-everything-server:latest)
 	$(call load-image,ghcr.io/kuadrant/mcp-gateway/test-custom-response-server:latest)
 
+# Load everything server image into Kind cluster
+kind-load-everything-server: kind build-everything-server ## Load everything server image into Kind cluster
+	@echo "Loading everything server image into Kind cluster..."
+	$(call load-image,ghcr.io/kuadrant/mcp-gateway/test-everything-server:latest)
+
 # Load conformance server image into Kind cluster
 .PHONY: kind-load-conformance-server
 kind-load-conformance-server: kind build-conformance-server ## Load conformance server image into Kind cluster
 	@echo "Loading conformance server image into Kind cluster..."
 	$(call load-image,ghcr.io/kuadrant/mcp-gateway/test-conformance-server:latest)
 
-# Deploy test servers excluding oidc
-deploy-simple-test-servers: kind-load-test-servers ## Deploy test MCP servers for local testing
-	@echo "Deploying test MCP servers..."
-	kubectl apply -k config/test-servers/
+# Deploy everything server only (for local dev)
+deploy-everything-server: kind-load-everything-server ## Deploy only the everything server for local dev
+	@echo "Deploying everything server..."
+	kubectl apply -f config/test-servers/namespace.yaml
+	kubectl apply -f config/test-servers/everything-server-deployment.yaml -n mcp-test
+	kubectl apply -f config/test-servers/everything-server-service.yaml -n mcp-test
+	kubectl apply -f config/test-servers/everything-server-httproute.yaml -n mcp-test
+
 # Deploy test servers
 deploy-test-servers: kind-load-test-servers ## Deploy test MCP servers for local testing
 	@echo "Deploying test MCP servers..."
@@ -580,9 +603,9 @@ else
 	"$(MAKE)" deploy
 endif
 	"${MAKE}" add-jwt-key
-	# Deploy and configure test servers
-	"$(MAKE)" deploy-test-servers
-	"$(MAKE)" deploy-example
+	# Deploy everything server for local dev (use 'make deploy-test-servers' for all servers)
+	"$(MAKE)" deploy-everything-server
+	"$(MAKE)" deploy-example-minimal
 	@echo "Local environment setup complete"
 
 .PHONY: local-bare-setup

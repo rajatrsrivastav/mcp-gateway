@@ -33,7 +33,7 @@ See [config/install/README.md](./config/install/README.md) for details and prere
 
 ### Development Environment
 
-For a complete local environment with all dependencies (Istio, Gateway API, Keycloak, MCP test servers):
+For a complete local environment with all dependencies (Istio, Gateway API, Keycloak, everything test server):
 
 ```bash
 make local-env-setup
@@ -43,8 +43,10 @@ This sets up:
 - a `kind` cluster
 - Istio as a Gateway API provider
 - MCP Gateway components (Broker / Router / Controller)
-- Test MCP servers
-- example configurations
+- the everything test server
+- example MCPServerRegistration
+
+To deploy all test servers, run `make deploy-test-servers` after setup.
 
 #### Adding e2e tests
 
@@ -54,7 +56,7 @@ If you are adding an e2e test, please consider using the claude slash command pr
 
 Set up a local kind cluster with the Broker, Router & Controller running.
 These components are built during the make target into a single image and loaded into the cluster.
-Also sets up an Istio Gateway API Gateway, and HTTPRoutes for test mcp servers, which are added to the broker/router.
+Also sets up an Istio Gateway API Gateway with the everything test server behind the broker/router.
 
 ```bash
 make local-env-setup

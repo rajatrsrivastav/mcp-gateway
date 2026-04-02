@@ -109,7 +109,7 @@ type ConfigReaderWriter interface {
 
 ### Quick Start
 ```bash
-make local-env-setup     # Create Kind cluster with everything
+make local-env-setup     # Create Kind cluster with gateway and everything server
 make reload              # Build, load to Kind, and restart controller and broker
 ```
 
