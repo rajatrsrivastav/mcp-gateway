@@ -119,7 +119,10 @@ kubectl apply -f https://raw.githubusercontent.com/Kuadrant/mcp-gateway/main/con
 kubectl wait --for=condition=available --timeout=90s deployment/authorino -n kuadrant-system
 
 # Patch Authorino deployment to resolve Keycloak's host name to MCP gateway IP (Development environment only):
-export GATEWAY_IP=$(kubectl get gateway/mcp-gateway -n gateway-system -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)
+export GATEWAY_IP=$(kubectl get gateway/mcp-gateway -n gateway-system -o jsonpath='{.status.addresses[0].value}' 2>/dev/null)
+if [ -z "$GATEWAY_IP" ]; then
+  GATEWAY_IP=$(kubectl get pod -l gateway.networking.k8s.io/gateway-name=mcp-gateway -n gateway-system -o jsonpath='{.items[0].status.podIP}')
+fi
 kubectl patch deployment authorino -n kuadrant-system --type='json' -p="[
   {
     \"op\": \"add\",
