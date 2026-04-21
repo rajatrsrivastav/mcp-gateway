@@ -25,6 +25,15 @@ This repo uses a fork workflow. Confirm with `git remote -v`:
 
 Both `main` and `release-*` branches have branch protection -- all changes require PRs.
 
+## Important notes
+
+- All changes go through PRs -- never push directly to protected branches
+- The `set-release-version.sh` script handles all version string updates across docs, scripts, and manifests
+- Creating the GitHub release triggers CI workflows that build images and push the Helm chart
+- Workflow URLs to watch:
+  - https://github.com/Kuadrant/mcp-gateway/actions/workflows/images.yaml
+  - https://github.com/Kuadrant/mcp-gateway/actions/workflows/helm-release.yaml
+
 ## Safety rules
 
 Follow these throughout the entire process:
@@ -64,15 +73,13 @@ git checkout -b release-{VERSION}
 
 **If it does not exist** (new minor release), tell the user:
 
-> The release branch `release-X.Y.Z` doesn't exist on upstream yet. You'll need to create it. Run:
-> ```
-> git checkout main && git pull upstream main
-> git checkout -b release-X.Y.Z
-> git push upstream release-X.Y.Z
-> ```
-> Then let me know when that's done and I'll continue.
+> The release branch `release-X.Y.Z` doesn't exist on upstream yet. Create it via the GitHub UI:
+> 1. Go to https://github.com/Kuadrant/mcp-gateway
+> 2. Click the branch dropdown, type `release-X.Y.Z`, and select **Create branch: release-X.Y.Z from main**
+>
+> Let me know when that's done and I'll continue.
 
-Do NOT push the release branch yourself. Wait for the user to confirm before continuing.
+Do NOT create the release branch yourself. Wait for the user to confirm before continuing.
 
 ### 3. Update version references
 
@@ -182,11 +189,3 @@ Then tell the user to push and open a PR:
 >   --body "Post-release version bump for {VERSION}."
 > ```
 
-## Important notes
-
-- All changes go through PRs -- never push directly to protected branches
-- The `set-release-version.sh` script handles all version string updates across docs, scripts, and manifests
-- Creating the GitHub release triggers CI workflows that build images and push the Helm chart
-- Workflow URLs to watch:
-  - https://github.com/Kuadrant/mcp-gateway/actions/workflows/images.yaml
-  - https://github.com/Kuadrant/mcp-gateway/actions/workflows/helm-release.yaml
