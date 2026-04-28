@@ -54,6 +54,24 @@ jobs:
             dockerfile: Dockerfile.controller
 
     steps:
+      - name: Validate custom tag
+        if: github.event_name == 'workflow_dispatch' && inputs.image_tag != ''
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [[ "$TAG" =~ ^v[0-9] ]]; then
+            echo "::error::Custom tag '$TAG' matches release tag format (vX.Y.Z). Use git tags for releases instead."
+            exit 1
+          fi
+          if [[ "$TAG" =~ ^[0-9]+\.[0-9]+ ]]; then
+            echo "::error::Custom tag '$TAG' matches semver format. Use git tags for releases instead."
+            exit 1
+          fi
+          if [[ "$TAG" == "latest" || "$TAG" == "main" ]]; then
+            echo "::error::Custom tag '$TAG' is reserved and cannot be used."
+            exit 1
+          fi
+          echo "Custom tag '$TAG' is valid"
+
       - name: Check out code
         uses: actions/checkout@v4
 
