@@ -221,7 +221,7 @@ kubectl logs -n mcp-system -l app.kubernetes.io/name=mcp-gateway
 - Ensure backend server returns valid MCP protocol responses
 - Verify `prefix` in MCPServerRegistration spec is valid (no spaces or special chars)
 
-### Tool Prefix Not Applied
+### Prefix Not Applied
 
 **Symptom**: Tools appear without the configured prefix
 

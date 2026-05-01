@@ -157,7 +157,7 @@ The `MCPServer` is a Kubernetes Custom Resource that defines an MCP (Model Conte
 
 Each `MCPServer` resource:
 - References a single HTTPRoute that points to a backend MCP service
-- Configures a tool prefix to avoid naming conflicts when federating tools
+- Configures a prefix to avoid naming conflicts when federating tools
 - Enables the controller to automatically discover and configure the broker with available MCP servers
 - Maintains status conditions to indicate whether the server is successfully discovered, valid and ready
 

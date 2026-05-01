@@ -320,7 +320,7 @@ The `tools/call` method is where routing happens - this is the most complex flow
 
 **What happens:**
 
-The router intercepts the request via Envoy ext_proc, strips the tool prefix, and routes to the appropriate backend server.
+The router intercepts the request via Envoy ext_proc, strips the prefix, and routes to the appropriate backend server.
 
 **Expected logs with debug logging enabled:**
 ```

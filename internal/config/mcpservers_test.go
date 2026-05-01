@@ -173,7 +173,7 @@ func TestMCPServer_ConfigChanged(t *testing.T) {
 			expectChanged: true,
 		},
 		{
-			name: "tool prefix changed",
+			name: "prefix changed",
 			current: &MCPServer{
 				Name:       "server1",
 				Prefix:     "s2_",
