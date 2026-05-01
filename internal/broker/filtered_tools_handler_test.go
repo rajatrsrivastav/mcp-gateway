@@ -23,11 +23,8 @@ VEiyi/nozagw7BaWXmzbOWyy95gZLirTkhUb1P4Z4lgKLU2rD5NCbGPHAA==
 -----END PUBLIC KEY-----`
 )
 
-func createTestJWT(t *testing.T, allowedTools map[string][]string) string {
+func createTestJWTWithCapabilities(t *testing.T, capabilities map[string]map[string][]string) string {
 	t.Helper()
-	capabilities := map[string]map[string][]string{
-		"tools": allowedTools,
-	}
 	claimPayload, _ := json.Marshal(capabilities)
 	block, _ := pem.Decode([]byte(`-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIEY3QeiP9B9Bm3NHG3SgyiDHcbckwsGsQLKgv4fJxjJWoAoGCCqGSM49
@@ -44,6 +41,13 @@ AwEHoUQDQgAE7WdMdvC8hviEAL4wcebqaYbLEtVOVEiyi/nozagw7BaWXmzbOWyy
 		t.Fatalf("error signing jwt %s", err)
 	}
 	return jwtToken
+}
+
+func createTestJWT(t *testing.T, allowedTools map[string][]string) string {
+	t.Helper()
+	return createTestJWTWithCapabilities(t, map[string]map[string][]string{
+		"tools": allowedTools,
+	})
 }
 
 // createTestManager creates a test MCPManager with pre-populated tools
@@ -161,6 +165,115 @@ func TestFilteredTools(t *testing.T) {
 				{Name: "test1_tool2"},
 			},
 		},
+	}
+
+	promptsOnlyJWT := createTestJWTWithCapabilities(t, map[string]map[string][]string{
+		"prompts": {"mcp-test/test-server1": {"prompt1"}},
+	})
+	toolsAndPromptsJWT := createTestJWTWithCapabilities(t, map[string]map[string][]string{
+		"tools":   {"mcp-test/test-server1": {"tool"}},
+		"prompts": {"mcp-test/test-server1": {"prompt1", "prompt2"}},
+	})
+	promptsOnlyCases := []struct {
+		Name                 string
+		FullToolList         *mcp.ListToolsResult
+		AllowedToolsList     map[string][]string
+		RegisteredMCPServers map[config.UpstreamMCPID]*upstream.MCPManager
+		enforceFilterList    bool
+		ExpectedTools        []mcp.Tool
+		jwtOverride          string
+	}{
+		{
+			Name: "prompts-only JWT returns all tools when enforce is false",
+			FullToolList: &mcp.ListToolsResult{Tools: []mcp.Tool{
+				{Name: "test1_tool"},
+				{Name: "test1_tool2"},
+			}},
+			RegisteredMCPServers: map[config.UpstreamMCPID]*upstream.MCPManager{
+				"mcp-test/test-server1:test1_:http://test.local/mcp": createTestManager(t,
+					"mcp-test/test-server1",
+					"test1_",
+					[]mcp.Tool{{Name: "tool"}, {Name: "tool2"}},
+				),
+			},
+			enforceFilterList: false,
+			jwtOverride:       promptsOnlyJWT,
+			ExpectedTools: []mcp.Tool{
+				{Name: "test1_tool"},
+				{Name: "test1_tool2"},
+			},
+		},
+		{
+			Name: "prompts-only JWT returns empty tools when enforce is true",
+			FullToolList: &mcp.ListToolsResult{Tools: []mcp.Tool{
+				{Name: "test1_tool"},
+				{Name: "test1_tool2"},
+			}},
+			RegisteredMCPServers: map[config.UpstreamMCPID]*upstream.MCPManager{
+				"mcp-test/test-server1:test1_:http://test.local/mcp": createTestManager(t,
+					"mcp-test/test-server1",
+					"test1_",
+					[]mcp.Tool{{Name: "tool"}, {Name: "tool2"}},
+				),
+			},
+			enforceFilterList: true,
+			jwtOverride:       promptsOnlyJWT,
+			ExpectedTools:     []mcp.Tool{},
+		},
+		{
+			Name: "tools and prompts JWT filters tools only, prompts ignored",
+			FullToolList: &mcp.ListToolsResult{Tools: []mcp.Tool{
+				{Name: "test1_tool"},
+				{Name: "test1_tool2"},
+			}},
+			RegisteredMCPServers: map[config.UpstreamMCPID]*upstream.MCPManager{
+				"mcp-test/test-server1:test1_:http://test.local/mcp": createTestManager(t,
+					"mcp-test/test-server1",
+					"test1_",
+					[]mcp.Tool{{Name: "tool"}, {Name: "tool2"}},
+				),
+			},
+			enforceFilterList: true,
+			jwtOverride:       toolsAndPromptsJWT,
+			ExpectedTools: []mcp.Tool{
+				{Name: "test1_tool"},
+			},
+		},
+	}
+
+	for _, tc := range promptsOnlyCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			mcpBroker := &mcpBrokerImpl{
+				enforceCapabilityFilter: tc.enforceFilterList,
+				trustedHeadersPublicKey: testPublicKey,
+				logger:                  slog.Default(),
+				mcpServers:              tc.RegisteredMCPServers,
+			}
+
+			request := &mcp.ListToolsRequest{
+				Header: http.Header{
+					authorizedCapabilitiesHeader: {tc.jwtOverride},
+				},
+			}
+			mcpBroker.FilterTools(context.TODO(), 1, request, tc.FullToolList)
+
+			if len(tc.ExpectedTools) != len(tc.FullToolList.Tools) {
+				t.Fatalf("expected %d tools but got %d: %v", len(tc.ExpectedTools), len(tc.FullToolList.Tools), tc.FullToolList.Tools)
+			}
+
+			for _, exp := range tc.ExpectedTools {
+				found := false
+				for _, actual := range tc.FullToolList.Tools {
+					if exp.Name == actual.Name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("expected to find tool %s but it was not in returned tools %v", exp.Name, tc.FullToolList.Tools)
+				}
+			}
+		})
 	}
 
 	for _, tc := range testCases {
