@@ -49,6 +49,14 @@ Replace `your-gateway-name`, `your-gateway-namespace`, and the `mcp` hostname wi
 >   --set gateway.publicHost=mcp.127-0-0-1.sslip.io
 > ```
 
+Verify both listeners were added:
+
+```bash
+kubectl get gateway your-gateway-name -n your-gateway-namespace -o jsonpath='{.spec.listeners[*].name}'
+```
+
+You should see both `mcp` and `mcps` in the output.
+
 ## Step 2: HTTPRoute (Automatic)
 
 The MCPGatewayExtension controller automatically creates an HTTPRoute named `mcp-gateway-route` when the extension becomes ready. The HTTPRoute:
