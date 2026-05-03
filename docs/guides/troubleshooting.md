@@ -67,7 +67,7 @@ kubectl logs -n mcp-system <pod-name>
 
 **Symptom**: The `mcp-gateway` broker pod is in `CrashLoopBackOff`. Logs end after a single line and there is no error message:
 
-```
+```text
 time=... level=INFO msg="jwt session manager configured"
 ```
 
