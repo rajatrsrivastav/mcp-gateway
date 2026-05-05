@@ -410,7 +410,7 @@ func LoadConfig(path string) {
 			"server name",
 			s.Name,
 			"server prefix",
-			s.ToolPrefix,
+			s.Prefix,
 			"enabled",
 			s.Enabled,
 			"backend url",
