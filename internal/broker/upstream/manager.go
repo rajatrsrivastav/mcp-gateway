@@ -258,10 +258,10 @@ func (man *MCPManager) manage(ctx context.Context, event eventType) {
 	}
 	// serverTools will have the prefix if one is set
 	man.logger.Debug("updating gateway tools", "upstream mcp server", man.MCP.ID(), "adding", len(toAdd), "removing", len(toRemove))
-	if len(toRemove) > 0 {
+	if man.gatewayServer != nil && len(toRemove) > 0 {
 		man.gatewayServer.DeleteTools(toRemove...)
 	}
-	if len(toAdd) > 0 {
+	if man.gatewayServer != nil && len(toAdd) > 0 {
 		man.gatewayServer.AddTools(toAdd...)
 	}
 
@@ -312,6 +312,9 @@ func (man *MCPManager) setStatus(err error, toolCount int, invalidTools []Invali
 }
 
 func (man *MCPManager) findToolConflicts(mcpTools []server.ServerTool) error {
+	if man.gatewayServer == nil {
+		return nil
+	}
 	gatewayServerTools := man.gatewayServer.ListTools()
 	var conflictingToolNames []string
 	for _, tool := range mcpTools {
@@ -410,7 +413,9 @@ func (man *MCPManager) removeAllTools() {
 	man.tools = []mcp.Tool{}
 	man.toolsMap = map[string]*mcp.Tool{}
 	man.servedToolsMap = map[string]*mcp.Tool{}
-	man.gatewayServer.DeleteTools(toolsToRemove...)
+	if man.gatewayServer != nil {
+		man.gatewayServer.DeleteTools(toolsToRemove...)
+	}
 	man.logger.Debug("removed all tools", "upstream mcp server", man.MCP.ID(), "count", len(toolsToRemove))
 }
 

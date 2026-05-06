@@ -986,3 +986,16 @@ func TestMCPManager_manage_AllValidTools(t *testing.T) {
 	assert.Empty(t, status.InvalidToolList)
 	assert.Len(t, gateway.tools, 2)
 }
+
+func TestMCPManager_findToolConflicts_nilGateway(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	mock := newMockMCP("test-server", "test_")
+	mock.tools = []mcp.Tool{validTool("tool1")}
+	mock.hasToolsCap = true
+	manager := NewUpstreamMCPManager(mock, nil, logger, 0, mcpv1alpha1.InvalidToolPolicyFilterOut)
+
+	// must not panic when gatewayServer is nil
+	assert.NotPanics(t, func() {
+		manager.manage(context.Background(), eventTypeTimer)
+	})
+}
