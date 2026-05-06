@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,7 +279,7 @@ func TestInMemoryCache_AddSession_Concurrent(t *testing.T) {
 				fmt.Sprintf("server%d", i),
 				fmt.Sprintf("upstream-session-%d", i),
 			)
-			require.NoError(t, addErr)
+			assert.NoError(t, addErr)
 		}(i)
 	}
 	wg.Wait()
@@ -307,7 +308,7 @@ func TestInMemoryCache_RemoveServerSession_Concurrent(t *testing.T) {
 	for i := range n {
 		go func(i int) {
 			defer wg.Done()
-			require.NoError(t, cache.RemoveServerSession(ctx, "gateway-session-1",
+			assert.NoError(t, cache.RemoveServerSession(ctx, "gateway-session-1",
 				fmt.Sprintf("server%d", i),
 			))
 		}(i)
@@ -336,12 +337,12 @@ func TestInMemoryCache_DeleteSessions_Concurrent(t *testing.T) {
 				fmt.Sprintf("server%d", i),
 				fmt.Sprintf("upstream-session-%d", i),
 			)
-			require.NoError(t, addErr)
+			assert.NoError(t, addErr)
 		}(i)
 
 		go func() {
 			defer wg.Done()
-			require.NoError(t, cache.DeleteSessions(ctx, "gateway-session-1"))
+			assert.NoError(t, cache.DeleteSessions(ctx, "gateway-session-1"))
 		}()
 	}
 	wg.Wait()
