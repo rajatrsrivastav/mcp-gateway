@@ -35,9 +35,9 @@ var logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 // mockGateway is a no-op ToolsAdderDeleter for tests that don't need real gateway behaviour.
 type mockGateway struct{}
 
-func newMockGateway() *mockGateway                             { return &mockGateway{} }
-func (m *mockGateway) AddTools(_ ...server.ServerTool)        {}
-func (m *mockGateway) DeleteTools(_ ...string)                {}
+func newMockGateway() *mockGateway                              { return &mockGateway{} }
+func (m *mockGateway) AddTools(_ ...server.ServerTool)          {}
+func (m *mockGateway) DeleteTools(_ ...string)                  {}
 func (m *mockGateway) ListTools() map[string]*server.ServerTool { return nil }
 
 // TestMain starts an MCP server that we will run actual tests against
