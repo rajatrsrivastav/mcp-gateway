@@ -97,7 +97,7 @@ The client's Authorization header is always forwarded to upstream servers, allow
 
 ### Tool-level RBAC
 
-AuthPolicy can enforce per-tool access control using the `x-mcp-toolname` and `x-mcp-servername` headers set by the router. JWT claims (e.g., `resource_access`) are matched against the requested tool to produce an `x-mcp-authorized` JWT signed header via Authorino. The broker verifies this signature and filters tool lists accordingly.  
+AuthPolicy can enforce per-tool access control using the `x-mcp-toolname` and `x-mcp-servername` headers set by the router. JWT claims (e.g., `resource_access`) are matched against the requested tool to produce an `x-mcp-authorized` JWT signed header via Authorino. The broker verifies this signature and filters tool lists accordingly.
 
 ## Session Isolation
 

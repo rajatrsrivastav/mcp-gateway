@@ -188,4 +188,3 @@ Then tell the user to push and open a PR:
 >   --title "Bump version to {VERSION}" \
 >   --body "Post-release version bump for {VERSION}."
 > ```
-
