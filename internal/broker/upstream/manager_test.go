@@ -1055,6 +1055,7 @@ func TestMCPManager_EventChannel_NotificationRoutesThrough(t *testing.T) {
 	}, time.Second, 10*time.Millisecond, "notification should trigger tool sync")
 }
 
+// verifies GetManagedTools/GetServedManagedTool don't race with manage() under -race.
 func TestMCPManager_ConcurrentReadsDuringManage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	mock := newMockMCP("test-server", "test_")
@@ -1074,7 +1075,8 @@ func TestMCPManager_ConcurrentReadsDuringManage(t *testing.T) {
 			defer wg.Done()
 			for range iterations {
 				tools := manager.GetManagedTools()
-				assert.NotNil(t, tools)
+				n := len(tools)
+				assert.True(t, n == 0 || n == 1 || n == 2, "unexpected tool count: %d", n)
 				_ = manager.GetServedManagedTool("test_tool1")
 			}
 		}()

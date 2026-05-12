@@ -93,9 +93,9 @@ type MCPManager struct {
 
 	// events funnels notifications into the Start() loop. Buffer of 1 coalesces
 	// rapid notifications; safe because manage() always does a full tool sync.
-	events chan eventType
-	stopOnce sync.Once      // ensures Stop() is only executed once
-	done     chan struct{}  // triggers the exit of the select and routine
+	events   chan eventType
+	stopOnce sync.Once     // ensures Stop() is only executed once
+	done     chan struct{} // triggers the exit of the select and routine
 	status   ServerValidationStatus
 }
 
