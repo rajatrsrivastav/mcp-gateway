@@ -1,0 +1,4 @@
+mcpGatewayExtension:
+  httpRouteManagement: Disabled  # This is what we want to test
+  sessionStore:
+    secretName: "my-secret"
