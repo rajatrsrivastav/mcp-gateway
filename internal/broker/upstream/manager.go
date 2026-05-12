@@ -93,8 +93,11 @@ type MCPManager struct {
 	// invalidToolPolicy controls behavior when upstream tools have invalid schemas
 	invalidToolPolicy mcpv1alpha1.InvalidToolPolicy
 
-	stopOnce sync.Once     // ensures Stop() is only executed once
-	done     chan struct{} // triggers the exit of the select and routine
+	// events funnels notifications into the Start() loop. Buffer of 1 coalesces
+	// rapid notifications; safe because manage() always does a full tool sync.
+	events chan eventType
+	stopOnce sync.Once      // ensures Stop() is only executed once
+	done     chan struct{}  // triggers the exit of the select and routine
 	status   ServerValidationStatus
 }
 
@@ -119,6 +122,7 @@ func NewUpstreamMCPManager(upstream MCP, gatewayServer ToolsAdderDeleter, logger
 		ticker:            time.NewTicker(tickerInterval),
 		logger:            logger,
 		invalidToolPolicy: policy,
+		events:            make(chan eventType, 1),
 		done:              make(chan struct{}),
 		toolsMap:          map[string]*mcp.Tool{},
 		servedToolsMap:    map[string]*mcp.Tool{},
@@ -146,6 +150,9 @@ func (man *MCPManager) Start(ctx context.Context) {
 		case <-man.ticker.C:
 			man.logger.Debug("health check tick", "upstream mcp server", man.MCP.ID())
 			man.manage(ctx, eventTypeTimer)
+		case evt := <-man.events:
+			man.logger.Debug("received event", "upstream mcp server", man.MCP.ID(), "event", evt)
+			man.manage(ctx, evt)
 		case <-man.done:
 			man.logger.Debug("shutting down manager", "upstream mcp server", man.MCP.ID())
 			return
@@ -168,13 +175,16 @@ func (man *MCPManager) Stop() {
 	})
 }
 
-func (man *MCPManager) registerCallbacks(ctx context.Context) func() {
+func (man *MCPManager) registerCallbacks() func() {
 	man.logger.Debug("registering callbacks", "upstream mcp server", man.MCP.ID())
 	return func() {
 		man.MCP.OnNotification(func(notification mcp.JSONRPCNotification) {
 			if notification.Method == notificationToolsListChanged {
 				man.logger.Debug("received notification", "upstream mcp server", man.MCP.ID(), "notification", notification)
-				man.manage(ctx, eventTypeNotification)
+				select {
+				case man.events <- eventTypeNotification:
+				default:
+				}
 				return
 			}
 		})
@@ -194,7 +204,7 @@ func (man *MCPManager) manage(ctx context.Context, event eventType) {
 	var numberOfTools = 0
 	// during connect the client will validate the protocol. So we don't have a separate validate requirement currently. If a client already exists it will be re-used.
 	man.logger.Debug("attempting to connect", "upstream mcp server", man.MCP.ID())
-	if err := man.MCP.Connect(ctx, man.registerCallbacks(ctx)); err != nil {
+	if err := man.MCP.Connect(ctx, man.registerCallbacks()); err != nil {
 		err = fmt.Errorf("failed to connect to upstream mcp %s removing tools : %w", man.MCP.ID(), err)
 		man.removeAllTools()
 		// we call disconnect here as we may have connected but failed to initialize
@@ -255,7 +265,6 @@ func (man *MCPManager) manage(ctx context.Context, event eventType) {
 	man.toolsLock.Lock()
 	man.tools = fetched
 	numberOfTools = len(fetched)
-	// set a tools map for quick look up by other functions
 	man.toolsMap = make(map[string]*mcp.Tool, len(fetched))
 	man.servedToolsMap = make(map[string]*mcp.Tool, len(fetched))
 	for i := range fetched {
@@ -263,7 +272,12 @@ func (man *MCPManager) manage(ctx context.Context, event eventType) {
 		toolName := prefixedName(man.MCP.GetPrefix(), fetched[i].Name)
 		man.servedToolsMap[toolName] = &fetched[i]
 	}
-	// serverTools will have the prefix if one is set
+	man.serverTools = slices.DeleteFunc(man.serverTools, func(tool server.ServerTool) bool {
+		return slices.Contains(toRemove, tool.Tool.Name)
+	})
+	man.serverTools = append(man.serverTools, toAdd...)
+	man.toolsLock.Unlock()
+
 	man.logger.Debug("updating gateway tools", "upstream mcp server", man.MCP.ID(), "adding", len(toAdd), "removing", len(toRemove))
 	if len(toRemove) > 0 {
 		man.gatewayServer.DeleteTools(toRemove...)
@@ -271,15 +285,7 @@ func (man *MCPManager) manage(ctx context.Context, event eventType) {
 	if len(toAdd) > 0 {
 		man.gatewayServer.AddTools(toAdd...)
 	}
-
-	// rebuild our internal tools
-	man.serverTools = slices.DeleteFunc(man.serverTools, func(tool server.ServerTool) bool {
-		return slices.Contains(toRemove, tool.Tool.Name)
-	})
-
-	man.serverTools = append(man.serverTools, toAdd...)
 	man.logger.Debug("internal tools", "upstream mcp server", man.MCP.ID(), "total", len(man.serverTools))
-	man.toolsLock.Unlock()
 	man.setStatus(nil, numberOfTools, invalidTools)
 }
 
@@ -352,12 +358,10 @@ func (man *MCPManager) findToolConflicts(mcpTools []server.ServerTool) error {
 	return nil
 }
 
-// getTools return the existing, and new tools
+// getTools return the existing, and new tools. Must only be called from the Start() event loop.
 func (man *MCPManager) getTools(ctx context.Context) ([]mcp.Tool, []mcp.Tool, error) {
-	man.toolsLock.RLock()
 	tools := make([]mcp.Tool, len(man.tools))
 	copy(tools, man.tools)
-	man.toolsLock.RUnlock()
 	res, err := man.MCP.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		return tools, tools, fmt.Errorf("failed to get tools: %w", err)
@@ -406,7 +410,6 @@ func (man *MCPManager) SetStatusForTesting(status ServerValidationStatus) {
 
 func (man *MCPManager) removeAllTools() {
 	man.toolsLock.Lock()
-	defer man.toolsLock.Unlock()
 	toolsToRemove := make([]string, 0, len(man.serverTools))
 	man.logger.Debug("removing tools from gateway", "upstream mcp server", man.MCP.ID(), "total", len(man.serverTools))
 	for _, tool := range man.serverTools {
@@ -417,6 +420,7 @@ func (man *MCPManager) removeAllTools() {
 	man.tools = []mcp.Tool{}
 	man.toolsMap = map[string]*mcp.Tool{}
 	man.servedToolsMap = map[string]*mcp.Tool{}
+	man.toolsLock.Unlock()
 	man.gatewayServer.DeleteTools(toolsToRemove...)
 	man.logger.Debug("removed all tools", "upstream mcp server", man.MCP.ID(), "count", len(toolsToRemove))
 }

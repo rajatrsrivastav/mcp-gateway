@@ -19,17 +19,18 @@ import (
 
 // MockMCP implements the MCP interface for testing
 type MockMCP struct {
-	name            string
-	prefix          string
-	id              config.UpstreamMCPID
-	cfg             *config.MCPServer
-	connectErr      error
-	pingErr         error
-	tools           []mcp.Tool
-	listToolsErr    error
-	protocolVersion string
-	hasToolsCap     bool
-	connected       bool
+	name                string
+	prefix              string
+	id                  config.UpstreamMCPID
+	cfg                 *config.MCPServer
+	connectErr          error
+	pingErr             error
+	tools               []mcp.Tool
+	listToolsErr        error
+	protocolVersion     string
+	hasToolsCap         bool
+	connected           bool
+	notificationHandler func(mcp.JSONRPCNotification)
 }
 
 func (m *MockMCP) GetName() string {
@@ -75,7 +76,9 @@ func (m *MockMCP) ListTools(_ context.Context, _ mcp.ListToolsRequest) (*mcp.Lis
 	return &mcp.ListToolsResult{Tools: m.tools}, nil
 }
 
-func (m *MockMCP) OnNotification(_ func(notification mcp.JSONRPCNotification)) {}
+func (m *MockMCP) OnNotification(handler func(notification mcp.JSONRPCNotification)) {
+	m.notificationHandler = handler
+}
 
 func (m *MockMCP) OnConnectionLost(_ func(err error)) {}
 
@@ -1016,4 +1019,77 @@ func TestMCPManager_NewUpstreamMCPManager_nilGateway(t *testing.T) {
 	_, err := NewUpstreamMCPManager(mock, nil, logger, 0, mcpv1alpha1.InvalidToolPolicyFilterOut)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "gateway server is required")
+}
+
+func TestMCPManager_EventChannel_NotificationRoutesThrough(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	mock := newMockMCP("test-server", "test_")
+	mock.tools = []mcp.Tool{validTool("tool1")}
+	mock.hasToolsCap = true
+	gateway := NewMockGatewayServer()
+	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go manager.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return len(gateway.ListTools()) == 1
+	}, time.Second, 10*time.Millisecond, "initial tools should be added")
+
+	// simulate upstream adding a tool
+	mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
+
+	// fire notification through the captured callback
+	require.NotNil(t, mock.notificationHandler, "notification handler should be registered")
+	mock.notificationHandler(mcp.JSONRPCNotification{
+		Notification: mcp.Notification{Method: notificationToolsListChanged},
+	})
+
+	require.Eventually(t, func() bool {
+		tools := gateway.ListTools()
+		_, has := tools["test_tool2"]
+		return len(tools) == 2 && has
+	}, time.Second, 10*time.Millisecond, "notification should trigger tool sync")
+}
+
+func TestMCPManager_ConcurrentReadsDuringManage(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	mock := newMockMCP("test-server", "test_")
+	mock.hasToolsCap = false
+	gateway := newMockToolsAdderDeleter()
+	manager, err := NewUpstreamMCPManager(mock, gateway, logger, 0, mcpv1alpha1.InvalidToolPolicyFilterOut)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	const readers = 10
+	const iterations = 100
+
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				tools := manager.GetManagedTools()
+				assert.NotNil(t, tools)
+				_ = manager.GetServedManagedTool("test_tool1")
+			}
+		}()
+	}
+
+	for i := range iterations {
+		if i%2 == 0 {
+			mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
+		} else {
+			mock.tools = []mcp.Tool{validTool("tool1")}
+		}
+		manager.manage(ctx, eventTypeTimer)
+	}
+
+	wg.Wait()
+	tools := manager.GetManagedTools()
+	assert.NotEmpty(t, tools, "tools should be present after concurrent access")
 }
