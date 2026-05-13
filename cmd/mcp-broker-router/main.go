@@ -59,7 +59,6 @@ var (
 	mcpBrokerAddrFlag              string
 	mcpRoutePublicHost             string
 	mcpRoutePrivateHost            string
-	mcpRouterKey                   string
 	cacheConnectionStringFlag      string
 	mcpConfigFile                  string
 	jwtSigningKeyFlag              string
@@ -100,13 +99,6 @@ func main() {
 		"The private host the MCP Gateway. The gateway router will use this to hairpin request to initialize MCP servers etc.",
 	)
 
-	// TODO ick not sure how to describe this
-	flag.StringVar(
-		&mcpRouterKey,
-		"mcp-router-key",
-		goenv.GetDefault("MCP_ROUTER_API_KEY", "secret-api-key"),
-		"this key is used to allow the router to send request through the gateway and be trusted by the router",
-	)
 	flag.StringVar(
 		&mcpConfigFile,
 		"mcp-gateway-config",
@@ -230,7 +222,6 @@ func main() {
 
 	mcpConfig.MCPGatewayExternalHostname = mcpRoutePublicHost
 	mcpConfig.MCPGatewayInternalHostname = mcpRoutePrivateHost
-	mcpConfig.RouterAPIKey = mcpRouterKey
 
 	// Only load config and run broker/router in standalone mode
 	mutex.Lock()

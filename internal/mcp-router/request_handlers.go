@@ -519,12 +519,22 @@ func (s *ExtProcServer) initializeMCPSeverSession(ctx context.Context, mcpReq *M
 	}
 	passThroughHeaders := map[string]string{}
 	if mcpReq.Headers != nil {
-		// We don't want to pass through any sudo routing headers :authority, :path etc or the mcp-session-id from the gateway. The mcp-session-id will be
-		// set by the client based on the target backend. otherwise pass through everything from the client in case of custom headers
+		// We don't want to pass through any pseudo routing headers (:authority,
+		// :path, etc.), the gateway-bound mcp-session-id, or the router-internal
+		// headers (mcp-init-host, router-key) which we set ourselves below via
+		// clients.Initialize. Dropping the router-internal headers here is
+		// defense-in-depth so a client-supplied value can never reach the
+		// hairpin request even if the override in clients.Initialize is later
+		// refactored. Everything else is passed through for custom headers.
 		for _, h := range mcpReq.Headers.Headers {
-			if !strings.HasPrefix(strings.ToLower(h.Key), ":") && strings.ToLower(h.Key) != "mcp-session-id" {
-				passThroughHeaders[h.Key] = string(h.RawValue)
+			key := strings.ToLower(h.Key)
+			if strings.HasPrefix(key, ":") ||
+				key == "mcp-session-id" ||
+				key == "mcp-init-host" ||
+				key == RoutingKey {
+				continue
 			}
+			passThroughHeaders[h.Key] = string(h.RawValue)
 		}
 		// ensure these gateway headers are set
 		passThroughHeaders["x-mcp-method"] = mcpReq.Method
@@ -544,7 +554,18 @@ func (s *ExtProcServer) initializeMCPSeverSession(ctx context.Context, mcpReq *M
 		mcpReq.clientElicitation = clientElicitation
 	}
 
-	clientHandle, err := s.InitForClient(ctx, s.RoutingConfig.MCPGatewayInternalHostname, s.RoutingConfig.RouterAPIKey, mcpServerConfig, passThroughHeaders, mcpReq.clientElicitation)
+	// mint a short-lived JWT bound to the target hostname; the router validates
+	// this token when the hairpin request re-enters the gateway in
+	// HandleNoneToolCall so we can never be tricked into routing to an
+	// attacker-controlled host by a forged `mcp-init-host` header.
+	initToken, err := s.JWTManager.GenerateBackendInitToken(mcpServerConfig.Hostname)
+	if err != nil {
+		s.Logger.ErrorContext(ctx, "failed to generate backend-init token", "error", err)
+		initSpan.RecordError(err)
+		initSpan.SetStatus(codes.Error, "failed to generate backend-init token")
+		return "", NewRouterErrorf(500, "failed to generate backend-init token: %w", err)
+	}
+	clientHandle, err := s.InitForClient(ctx, s.RoutingConfig.MCPGatewayInternalHostname, initToken, mcpServerConfig, passThroughHeaders, mcpReq.clientElicitation)
 	if err != nil {
 		s.Logger.ErrorContext(ctx, "failed to get remote session ", "error", err)
 		initSpan.RecordError(err)
@@ -611,10 +632,16 @@ func (s *ExtProcServer) HandleNoneToolCall(ctx context.Context, mcpReq *MCPReque
 	if mcpReq.isInitializeRequest() {
 		remoteInitializeTarget := mcpReq.GetSingleHeaderValue("mcp-init-host")
 		if remoteInitializeTarget != "" {
-			// TODO look to use a signed key possible the JWT session key
-			key := mcpReq.GetSingleHeaderValue(RoutingKey)
-			if key != s.RoutingConfig.RouterAPIKey {
-				s.Logger.WarnContext(ctx, "unexpected remote initialize request. Key does not match. Rejecting", "sent headers", mcpReq.Headers)
+			// validate the backend-init JWT bound to the target host. Any
+			// caller-controlled value here is rejected because they cannot
+			// produce a valid signature against the gateway's HMAC key.
+			token := mcpReq.GetSingleHeaderValue(RoutingKey)
+			if s.JWTManager == nil {
+				s.Logger.ErrorContext(ctx, "jwt manager not configured; rejecting initialize hairpin")
+				return response.WithImmediateResponse(500, "internal error").Build()
+			}
+			if err := s.JWTManager.ValidateBackendInitToken(token, remoteInitializeTarget); err != nil {
+				s.Logger.WarnContext(ctx, "rejecting initialize hairpin: invalid backend-init token", "error", err, "target", remoteInitializeTarget)
 				return response.WithImmediateResponse(400, "bad request").Build()
 			}
 

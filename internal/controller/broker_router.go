@@ -2,8 +2,6 @@ package controller
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"slices"
@@ -39,6 +37,9 @@ const (
 
 // managedCommandFlags are the flags the controller owns and reconciles.
 // Any flag not in this list is user-managed and preserved as-is.
+// `--mcp-router-key` is kept in the list (without being generated) so that
+// existing deployments running an old controller image have the now-removed
+// flag stripped on the next reconcile rather than preserved as a "user flag".
 var managedCommandFlags = []string{
 	"--mcp-broker-public-address",
 	"--mcp-gateway-private-host",
@@ -75,7 +76,6 @@ func (r *MCPGatewayExtensionReconciler) buildBrokerRouterDeployment(mcpExt *mcpv
 		command = append(command, fmt.Sprintf("--mcp-check-interval=%d", *mcpExt.Spec.BackendPingIntervalSeconds))
 	}
 	command = append(command, "--mcp-gateway-public-host="+publicHost)
-	command = append(command, "--mcp-router-key="+routerKey(mcpExt))
 
 	envVars := []corev1.EnvVar{
 		{
@@ -240,12 +240,6 @@ func (r *MCPGatewayExtensionReconciler) buildBrokerRouterService(mcpExt *mcpv1al
 			},
 		},
 	}
-}
-
-// routerKey generates a deterministic key for hair-pinning requests based on the extension's UID
-func routerKey(mcpExt *mcpv1alpha1.MCPGatewayExtension) string {
-	hash := sha256.Sum256([]byte(mcpExt.UID))
-	return hex.EncodeToString(hash[:16])
 }
 
 // stripPort removes port suffix from a host string (e.g. "example.com:8001" -> "example.com")
@@ -539,6 +533,21 @@ func (r *MCPGatewayExtensionReconciler) buildGatewayHTTPRoute(mcpExt *mcpv1alpha
 	gatewayNamespace := gatewayv1.Namespace(mcpExt.Spec.TargetRef.Namespace)
 	sectionName := gatewayv1.SectionName(mcpExt.Spec.TargetRef.SectionName)
 
+	// Defense-in-depth: strip router-internal headers from any client request
+	// so even a buggy or unauthenticated path through the ext_proc cannot
+	// surface caller-controlled values for `mcp-init-host` or `router-key` to
+	// backend MCP servers. The router itself signs and validates a short-lived
+	// JWT in the `router-key` header on the hairpin path; the HTTPRoute filter
+	// ensures these headers never leak out of the gateway towards a backend.
+	stripRouterHeaders := []gatewayv1.HTTPRouteFilter{
+		{
+			Type: gatewayv1.HTTPRouteFilterRequestHeaderModifier,
+			RequestHeaderModifier: &gatewayv1.HTTPHeaderFilter{
+				Remove: []string{"mcp-init-host", "router-key"},
+			},
+		},
+	}
+
 	return &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      gatewayHTTPRouteName,
@@ -570,6 +579,7 @@ func (r *MCPGatewayExtensionReconciler) buildGatewayHTTPRoute(mcpExt *mcpv1alpha
 							},
 						},
 					},
+					Filters: stripRouterHeaders,
 					BackendRefs: []gatewayv1.HTTPBackendRef{
 						{
 							BackendRef: gatewayv1.BackendRef{

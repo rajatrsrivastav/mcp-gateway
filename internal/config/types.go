@@ -21,7 +21,6 @@ type MCPServersConfig struct {
 	//MCPGatewayExternalHostname is the accessible host of the gateway listener
 	MCPGatewayExternalHostname string
 	MCPGatewayInternalHostname string
-	RouterAPIKey               string
 }
 
 // RegisterObserver registers an observer to be notified of changes to the config
