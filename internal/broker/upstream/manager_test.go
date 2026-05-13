@@ -438,10 +438,12 @@ func TestMCPManager_Stop_Idempotent(t *testing.T) {
 	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
 	require.NoError(t, err)
 
+	active := manager.Start(context.Background())
+
 	// calling Stop multiple times should not panic
-	manager.Stop()
-	manager.Stop()
-	manager.Stop()
+	active.Stop()
+	active.Stop()
+	active.Stop()
 
 	// verify manager state after stop
 	assert.False(t, mock.connected.Load(), "mock should be disconnected after stop")
@@ -1105,39 +1107,33 @@ func TestMCPManager_ConcurrentReadsDuringManage(t *testing.T) {
 	assert.NotEmpty(t, tools, "tools should be present after concurrent access")
 }
 
-// TestMCPManager_StopRaceWithManage calls Stop() from a separate goroutine
-// while manage() is in flight. Run with -race to catch unsynchronized reads
-// of man.tools and man.serverTools in getTools/shouldFetchTools/setStatus.
-func TestMCPManager_StopRaceWithManage(t *testing.T) {
+// TestMCPManager_StopDuringManage starts the event loop, triggers a manage()
+// cycle via the events channel (with a slow ListTools), then calls Stop() while
+// manage() is in-flight. Verifies the shutdown path completes without deadlock.
+func TestMCPManager_StopDuringManage(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	mock := newMockMCP("race-server", "race_")
 	mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
 	mock.hasToolsCap = false
 	// slow down ListTools so manage() is mid-flight when Stop() fires
-	mock.listToolsDelay = 50 * time.Millisecond
+	mock.listToolsDelay = 100 * time.Millisecond
 	gateway := NewMockGatewayServer()
 	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	active := manager.Start(context.Background())
+	// let Start complete its initial manage() call
+	time.Sleep(200 * time.Millisecond)
 
-	// seed tools so getTools reads a non-empty slice
-	manager.SetToolsForTesting([]mcp.Tool{validTool("tool1"), validTool("tool2")})
+	// trigger another manage() on the event loop via the events channel;
+	// ListTools will block for 100ms giving us time to call Stop()
+	manager.events <- eventTypeNotification
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		manager.manage(ctx, eventTypeTimer)
-	}()
-
-	// give manage() time to enter getTools -> ListTools (which is delayed)
 	time.Sleep(10 * time.Millisecond)
 
-	// Stop() from a different goroutine — removeAllTools writes man.tools
-	// while getTools is reading it
-	manager.Stop()
+	// Stop() cancels the context; the event loop will finish the in-flight
+	// manage(), then select ctx.Done() and run removeAllTools
+	active.Stop()
 
-	wg.Wait()
+	assert.False(t, mock.connected.Load(), "mock should be disconnected after stop")
 }

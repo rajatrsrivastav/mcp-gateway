@@ -32,7 +32,7 @@ type MCPBroker interface {
 	MCPServer() *server.MCPServer
 
 	//RegisteredServers returns the map of registered servers
-	RegisteredMCPServers() map[config.UpstreamMCPID]*upstream.MCPManager
+	RegisteredMCPServers() map[config.UpstreamMCPID]upstream.ActiveMCPServer
 
 	// GetVirtualSeverByHeader returns a virtual server definition based on a header where the header is the namespaced/name of the virtual server resource
 	GetVirtualSeverByHeader(namespaceName string) (config.VirtualServer, error)
@@ -61,7 +61,7 @@ type mcpBrokerImpl struct {
 	vsLock         sync.RWMutex //vsLock is for managing access to the virtual servers
 
 	// mcpServers tracks the known servers
-	mcpServers map[config.UpstreamMCPID]*upstream.MCPManager
+	mcpServers map[config.UpstreamMCPID]upstream.ActiveMCPServer
 	// protects mcpServers
 	mcpLock sync.RWMutex
 
@@ -120,7 +120,7 @@ func WithInvalidToolPolicy(policy mcpv1alpha1.InvalidToolPolicy) Option {
 // NewBroker creates a new MCPBroker accepts optional config functions such as WithEnforceCapabilityFilter
 func NewBroker(logger *slog.Logger, opts ...Option) MCPBroker {
 	mcpBkr := &mcpBrokerImpl{
-		mcpServers:            map[config.UpstreamMCPID]*upstream.MCPManager{},
+		mcpServers:            map[config.UpstreamMCPID]upstream.ActiveMCPServer{},
 		logger:                logger,
 		virtualServers:        map[string]*config.VirtualServer{},
 		managerTickerInterval: time.Second * 60,
@@ -189,7 +189,7 @@ func (m *mcpBrokerImpl) OnConfigChange(ctx context.Context, conf *config.MCPServ
 		if ok {
 			m.logger.Info("Server is registered", "mcpID", mcpServer.ID())
 			// already have a manger
-			if mcpServer.ConfigChanged(man.MCP.GetConfig()) {
+			if mcpServer.ConfigChanged(man.Config()) {
 				// todo prob could look at just updating the config
 				m.logger.Info("Server Config Changed removing manager", "mcpID", mcpServer.ID())
 				man.Stop()
@@ -204,11 +204,8 @@ func (m *mcpBrokerImpl) OnConfigChange(ctx context.Context, conf *config.MCPServ
 				m.logger.Error("failed to create manager", "server id", mcpServer.ID(), "error", err)
 				continue
 			}
-			m.mcpServers[mcpServer.ID()] = manager
-			go func() {
-				m.logger.Info("Starting manager for", "mcpID", mcpServer.ID())
-				manager.Start(ctx)
-			}()
+			m.logger.Info("Starting manager for", "mcpID", mcpServer.ID())
+			m.mcpServers[mcpServer.ID()] = manager.Start(ctx)
 		}
 	}
 	// register virtual servers
@@ -220,7 +217,7 @@ func (m *mcpBrokerImpl) OnConfigChange(ctx context.Context, conf *config.MCPServ
 	m.logger.Debug("Broker OnConfigChange done", "Total managers for upstream mcp servers", len(m.mcpServers), "total servers", len(conf.Servers))
 }
 
-func (m *mcpBrokerImpl) RegisteredMCPServers() map[config.UpstreamMCPID]*upstream.MCPManager {
+func (m *mcpBrokerImpl) RegisteredMCPServers() map[config.UpstreamMCPID]upstream.ActiveMCPServer {
 	m.mcpLock.RLock()
 	defer m.mcpLock.RUnlock()
 	return m.mcpServers
@@ -264,9 +261,9 @@ func (m *mcpBrokerImpl) GetServerInfo(tool string) (*config.MCPServer, error) {
 		if t != nil {
 			m.logger.Debug("found matching server",
 				"toolName", tool,
-				"serverPrefix", upstream.MCP.GetPrefix(),
-				"serverName", upstream.MCP.GetName())
-			retval := upstream.MCP.GetConfig()
+				"serverPrefix", upstream.Config().Prefix,
+				"serverName", upstream.MCPName())
+			retval := upstream.Config()
 			return &retval, nil
 		}
 	}

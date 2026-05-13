@@ -514,7 +514,7 @@ func (m *mockBrokerImpl) OnConfigChange(_ context.Context, _ *config.MCPServersC
 }
 
 // RegisteredMCPServers implements broker.MCPBroker.
-func (m *mockBrokerImpl) RegisteredMCPServers() map[config.UpstreamMCPID]*upstream.MCPManager {
+func (m *mockBrokerImpl) RegisteredMCPServers() map[config.UpstreamMCPID]upstream.ActiveMCPServer {
 	panic("unimplemented")
 }
 
