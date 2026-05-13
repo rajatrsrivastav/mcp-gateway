@@ -93,10 +93,10 @@ type MCPManager struct {
 
 	// events funnels notifications into the Start() loop. Buffer of 1 coalesces
 	// rapid notifications; safe because manage() always does a full tool sync.
-	events   chan eventType
-	stopOnce sync.Once     // ensures Stop() is only executed once
-	done     chan struct{} // triggers the exit of the select and routine
-	status   ServerValidationStatus
+	events chan eventType
+	cancel context.CancelFunc // cancels the internal context to stop the event loop
+	done   chan struct{}      // closed when the event loop exits
+	status ServerValidationStatus
 }
 
 // DefaultTickerInterval is the default interval for backend health checks
@@ -138,39 +138,41 @@ func (man *MCPManager) MCPName() string {
 // registers notification callbacks to handle tool list changes. This method blocks
 // until Stop is called or the context is cancelled.
 func (man *MCPManager) Start(ctx context.Context) {
+	ctx, man.cancel = context.WithCancel(ctx)
 	man.ticker.Reset(man.tickerInterval)
 	man.manage(ctx, eventTypeTimer)
 
 	for {
 		select {
 		case <-ctx.Done():
-			man.Stop()
+			man.ticker.Stop()
+			if err := man.MCP.Disconnect(); err != nil {
+				man.logger.Error("failed to disconnect during stop", "upstream mcp server", man.MCP.ID(), "error", err)
+			}
+			man.removeAllTools()
+
+			close(man.done)
+			man.logger.Debug("manager stopped", "upstream mcp server", man.MCP.ID())
+			return
 		case <-man.ticker.C:
 			man.logger.Debug("health check tick", "upstream mcp server", man.MCP.ID())
 			man.manage(ctx, eventTypeTimer)
 		case evt := <-man.events:
 			man.logger.Debug("received event", "upstream mcp server", man.MCP.ID(), "event", evt)
 			man.manage(ctx, evt)
-		case <-man.done:
-			man.logger.Debug("shutting down manager", "upstream mcp server", man.MCP.ID())
-			return
 		}
 	}
 }
 
-// Stop gracefully shuts down the manager. It stops the ticker, removes all tools
-// from the gateway, disconnects from the upstream server, and waits for the Start
-// goroutine to complete. Safe to call multiple times.
+// Stop cancels the event loop and waits for teardown to complete.
+// All cleanup (remove tools, disconnect) happens on the event loop goroutine.
+// Safe to call before Start (no-op) and multiple times.
 func (man *MCPManager) Stop() {
-	man.stopOnce.Do(func() {
-		man.ticker.Stop()
-		man.removeAllTools()
-		if err := man.MCP.Disconnect(); err != nil {
-			man.logger.Error("failed to disconnect during stop", "upstream mcp server", man.MCP.ID(), "error", err)
-		}
-		close(man.done)
-		man.logger.Debug("manager stopped", "upstream mcp server", man.MCP.ID())
-	})
+	if man.cancel == nil {
+		return
+	}
+	man.cancel()
+	<-man.done
 }
 
 func (man *MCPManager) registerCallbacks() func() {

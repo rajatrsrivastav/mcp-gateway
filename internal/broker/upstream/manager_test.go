@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,9 +28,10 @@ type MockMCP struct {
 	pingErr             error
 	tools               []mcp.Tool
 	listToolsErr        error
+	listToolsDelay      time.Duration
 	protocolVersion     string
 	hasToolsCap         bool
-	connected           bool
+	connected           atomic.Bool
 	notificationHandler func(mcp.JSONRPCNotification)
 }
 
@@ -53,7 +55,7 @@ func (m *MockMCP) Connect(_ context.Context, onConnected func()) error {
 	if m.connectErr != nil {
 		return m.connectErr
 	}
-	m.connected = true
+	m.connected.Store(true)
 	if onConnected != nil {
 		onConnected()
 	}
@@ -65,11 +67,18 @@ func (m *MockMCP) SupportsToolsListChanged() bool {
 }
 
 func (m *MockMCP) Disconnect() error {
-	m.connected = false
+	m.connected.Store(false)
 	return nil
 }
 
-func (m *MockMCP) ListTools(_ context.Context, _ mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+func (m *MockMCP) ListTools(ctx context.Context, _ mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+	if m.listToolsDelay > 0 {
+		select {
+		case <-time.After(m.listToolsDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if m.listToolsErr != nil {
 		return nil, m.listToolsErr
 	}
@@ -435,7 +444,7 @@ func TestMCPManager_Stop_Idempotent(t *testing.T) {
 	manager.Stop()
 
 	// verify manager state after stop
-	assert.False(t, mock.connected, "mock should be disconnected after stop")
+	assert.False(t, mock.connected.Load(), "mock should be disconnected after stop")
 }
 
 func TestMCPManager_manage_ConnectError(t *testing.T) {
@@ -1094,4 +1103,41 @@ func TestMCPManager_ConcurrentReadsDuringManage(t *testing.T) {
 	wg.Wait()
 	tools := manager.GetManagedTools()
 	assert.NotEmpty(t, tools, "tools should be present after concurrent access")
+}
+
+// TestMCPManager_StopRaceWithManage calls Stop() from a separate goroutine
+// while manage() is in flight. Run with -race to catch unsynchronized reads
+// of man.tools and man.serverTools in getTools/shouldFetchTools/setStatus.
+func TestMCPManager_StopRaceWithManage(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	mock := newMockMCP("race-server", "race_")
+	mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
+	mock.hasToolsCap = false
+	// slow down ListTools so manage() is mid-flight when Stop() fires
+	mock.listToolsDelay = 50 * time.Millisecond
+	gateway := NewMockGatewayServer()
+	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// seed tools so getTools reads a non-empty slice
+	manager.SetToolsForTesting([]mcp.Tool{validTool("tool1"), validTool("tool2")})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		manager.manage(ctx, eventTypeTimer)
+	}()
+
+	// give manage() time to enter getTools -> ListTools (which is delayed)
+	time.Sleep(10 * time.Millisecond)
+
+	// Stop() from a different goroutine — removeAllTools writes man.tools
+	// while getTools is reading it
+	manager.Stop()
+
+	wg.Wait()
 }
