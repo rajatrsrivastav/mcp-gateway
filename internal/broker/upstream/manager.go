@@ -149,9 +149,9 @@ func (man *MCPManager) MCPName() string {
 func (man *MCPManager) Start(ctx context.Context) ActiveMCPServer {
 	ctx, cancel := context.WithCancel(ctx)
 	man.ticker.Reset(man.tickerInterval)
-	man.manage(ctx, eventTypeTimer)
 
 	go func() {
+		man.manage(ctx, eventTypeTimer)
 		for {
 			select {
 			case <-ctx.Done():
