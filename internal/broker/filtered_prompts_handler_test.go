@@ -28,7 +28,7 @@ func TestFilterPrompts(t *testing.T) {
 	testCases := []struct {
 		Name                 string
 		FullPromptList       *mcp.ListPromptsResult
-		RegisteredMCPServers map[config.UpstreamMCPID]*upstream.MCPManager
+		RegisteredMCPServers map[config.UpstreamMCPID]upstream.ActiveMCPServer
 		enforceFilterList    bool
 		ExpectedPrompts      []string
 	}{
@@ -38,7 +38,7 @@ func TestFilterPrompts(t *testing.T) {
 				{Name: "test_prompt1"},
 				{Name: "test_prompt2"},
 			}},
-			RegisteredMCPServers: map[config.UpstreamMCPID]*upstream.MCPManager{},
+			RegisteredMCPServers: map[config.UpstreamMCPID]upstream.ActiveMCPServer{},
 			enforceFilterList:    false,
 			ExpectedPrompts:      []string{"test_prompt1", "test_prompt2"},
 		},
@@ -47,14 +47,14 @@ func TestFilterPrompts(t *testing.T) {
 			FullPromptList: &mcp.ListPromptsResult{Prompts: []mcp.Prompt{
 				{Name: "test_prompt1"},
 			}},
-			RegisteredMCPServers: map[config.UpstreamMCPID]*upstream.MCPManager{},
+			RegisteredMCPServers: map[config.UpstreamMCPID]upstream.ActiveMCPServer{},
 			enforceFilterList:    true,
 			ExpectedPrompts:      []string{},
 		},
 		{
 			Name:                 "returns empty slice for nil prompts input",
 			FullPromptList:       &mcp.ListPromptsResult{Prompts: nil},
-			RegisteredMCPServers: map[config.UpstreamMCPID]*upstream.MCPManager{},
+			RegisteredMCPServers: map[config.UpstreamMCPID]upstream.ActiveMCPServer{},
 			enforceFilterList:    false,
 			ExpectedPrompts:      []string{},
 		},
@@ -88,12 +88,12 @@ func TestFilterPrompts_JWTFiltering(t *testing.T) {
 		enforceCapabilityFilter: true,
 		trustedHeadersPublicKey: testPublicKey,
 		logger:                  slog.Default(),
-		mcpServers: map[config.UpstreamMCPID]*upstream.MCPManager{
-			"mcp-test/test-server1:test_:http://test.local/mcp": createPromptTestManager(t,
+		mcpServers: map[config.UpstreamMCPID]upstream.ActiveMCPServer{
+			"mcp-test/test-server1:test_:http://test.local/mcp": upstream.NewActiveForTesting(createPromptTestManager(t,
 				"mcp-test/test-server1",
 				"test_",
 				[]mcp.Prompt{{Name: "prompt1"}, {Name: "prompt2"}},
-			),
+			)),
 		},
 	}
 
@@ -126,12 +126,12 @@ func TestFilterPrompts_ToolsOnlyJWTReturnsAllPrompts(t *testing.T) {
 		enforceCapabilityFilter: false,
 		trustedHeadersPublicKey: testPublicKey,
 		logger:                  slog.Default(),
-		mcpServers: map[config.UpstreamMCPID]*upstream.MCPManager{
-			"mcp-test/test-server1:test_:http://test.local/mcp": createPromptTestManager(t,
+		mcpServers: map[config.UpstreamMCPID]upstream.ActiveMCPServer{
+			"mcp-test/test-server1:test_:http://test.local/mcp": upstream.NewActiveForTesting(createPromptTestManager(t,
 				"mcp-test/test-server1",
 				"test_",
 				[]mcp.Prompt{{Name: "prompt1"}},
-			),
+			)),
 		},
 	}
 

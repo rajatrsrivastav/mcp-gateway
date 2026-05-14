@@ -292,11 +292,12 @@ func (m *mcpBrokerImpl) GetServerInfoByPrompt(prompt string) (*config.MCPServer,
 	for _, upstream := range m.mcpServers {
 		p := upstream.GetServedManagedPrompt(prompt)
 		if p != nil {
+			cfg := upstream.Config()
 			m.logger.Debug("found matching server for prompt",
 				"promptName", prompt,
-				"serverPrefix", upstream.MCP.GetPrefix(),
-				"serverName", upstream.MCP.GetName())
-			retval := upstream.MCP.GetConfig()
+				"serverPrefix", cfg.Prefix,
+				"serverName", upstream.MCPName())
+			retval := cfg
 			return &retval, nil
 		}
 	}

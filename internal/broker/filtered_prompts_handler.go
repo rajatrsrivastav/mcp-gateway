@@ -84,7 +84,7 @@ func (broker *mcpBrokerImpl) filterPromptsByServerMap(allowedPrompts map[string]
 
 		for _, prompt := range prompts {
 			if slices.Contains(promptNames, prompt.Name) {
-				prompt.Name = fmt.Sprintf("%s%s", upstream.MCP.GetPrefix(), prompt.Name)
+				prompt.Name = fmt.Sprintf("%s%s", upstream.Config().Prefix, prompt.Name)
 				filtered = append(filtered, prompt)
 			}
 		}
