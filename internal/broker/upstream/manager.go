@@ -129,11 +129,14 @@ type MCPManager struct {
 	// invalidToolPolicy controls behavior when upstream tools have invalid schemas
 	invalidToolPolicy mcpv1alpha1.InvalidToolPolicy
 
-	// events funnels notifications into the Start() loop. Buffer of 1 coalesces
-	// rapid notifications; safe because manage() always does a full tool sync.
-	events chan eventType
-	done   chan struct{} // closed when the event loop exits
-	status ServerValidationStatus
+	// toolEvents and promptEvents funnel notifications into the Start() loop.
+	// Separate channels with buffer of 1 each ensure a tool notification cannot
+	// block a prompt notification (or vice versa) while still coalescing rapid
+	// same-type notifications.
+	toolEvents   chan struct{}
+	promptEvents chan struct{}
+	done         chan struct{} // closed when the event loop exits
+	status       ServerValidationStatus
 }
 
 // DefaultTickerInterval is the default interval for backend health checks
@@ -158,7 +161,8 @@ func NewUpstreamMCPManager(upstream MCP, gatewayServer ToolsAdderDeleter, prompt
 		ticker:            time.NewTicker(tickerInterval),
 		logger:            logger,
 		invalidToolPolicy: policy,
-		events:            make(chan eventType, 1),
+		toolEvents:        make(chan struct{}, 1),
+		promptEvents:      make(chan struct{}, 1),
 		done:              make(chan struct{}),
 		toolsMap:          map[string]*mcp.Tool{},
 		servedToolsMap:    map[string]*mcp.Tool{},
@@ -199,9 +203,12 @@ func (man *MCPManager) Start(ctx context.Context) ActiveMCPServer {
 			case <-man.ticker.C:
 				man.logger.Debug("health check tick", "upstream mcp server", man.mcp.ID())
 				man.manage(ctx, eventTypeTimer)
-			case evt := <-man.events:
-				man.logger.Debug("received event", "upstream mcp server", man.mcp.ID(), "event", evt)
-				man.manage(ctx, evt)
+			case <-man.toolEvents:
+				man.logger.Debug("received tool notification", "upstream mcp server", man.mcp.ID())
+				man.manage(ctx, eventTypeToolNotification)
+			case <-man.promptEvents:
+				man.logger.Debug("received prompt notification", "upstream mcp server", man.mcp.ID())
+				man.manage(ctx, eventTypePromptNotification)
 			}
 		}
 	}()
@@ -238,13 +245,13 @@ func (man *MCPManager) registerCallbacks() func() {
 			case notificationToolsListChanged:
 				man.logger.Debug("received notification", "upstream mcp server", man.mcp.ID(), "notification", notification.Method)
 				select {
-				case man.events <- eventTypeToolNotification:
+				case man.toolEvents <- struct{}{}:
 				default:
 				}
 			case notificationPromptsListChanged:
 				man.logger.Debug("received notification", "upstream mcp server", man.mcp.ID(), "notification", notification.Method)
 				select {
-				case man.events <- eventTypePromptNotification:
+				case man.promptEvents <- struct{}{}:
 				default:
 				}
 			}
@@ -260,8 +267,8 @@ func (man *MCPManager) registerCallbacks() func() {
 // manage should be the only entry point that triggers changes to tools
 func (man *MCPManager) manage(ctx context.Context, event eventType) {
 	man.logger.Debug("managing connection", "upstream mcp server", man.mcp.ID(), "event type", event)
-	var numberOfTools int
-	var numberOfPrompts int
+	numberOfTools := len(man.tools)
+	numberOfPrompts := len(man.prompts)
 	// during connect the client will validate the protocol. So we don't have a separate validate requirement currently. If a client already exists it will be re-used.
 	man.logger.Debug("attempting to connect", "upstream mcp server", man.mcp.ID())
 	if err := man.mcp.Connect(ctx, man.registerCallbacks()); err != nil {

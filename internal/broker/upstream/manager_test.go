@@ -1145,7 +1145,7 @@ func TestMCPManager_StopDuringManage(t *testing.T) {
 
 	// trigger another manage() on the event loop via the events channel;
 	// ListTools will block for 100ms giving us time to call Stop()
-	manager.events <- eventTypeToolNotification
+	manager.toolEvents <- struct{}{}
 
 	time.Sleep(10 * time.Millisecond)
 
