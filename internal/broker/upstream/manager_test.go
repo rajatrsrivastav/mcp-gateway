@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,17 +20,19 @@ import (
 
 // MockMCP implements the MCP interface for testing
 type MockMCP struct {
-	name            string
-	prefix          string
-	id              config.UpstreamMCPID
-	cfg             *config.MCPServer
-	connectErr      error
-	pingErr         error
-	tools           []mcp.Tool
-	listToolsErr    error
-	protocolVersion string
-	hasToolsCap     bool
-	connected       bool
+	name                string
+	prefix              string
+	id                  config.UpstreamMCPID
+	cfg                 *config.MCPServer
+	connectErr          error
+	pingErr             error
+	tools               []mcp.Tool
+	listToolsErr        error
+	listToolsDelay      time.Duration
+	protocolVersion     string
+	hasToolsCap         bool
+	connected           atomic.Bool
+	notificationHandler func(mcp.JSONRPCNotification)
 }
 
 func (m *MockMCP) GetName() string {
@@ -52,7 +55,7 @@ func (m *MockMCP) Connect(_ context.Context, onConnected func()) error {
 	if m.connectErr != nil {
 		return m.connectErr
 	}
-	m.connected = true
+	m.connected.Store(true)
 	if onConnected != nil {
 		onConnected()
 	}
@@ -64,18 +67,27 @@ func (m *MockMCP) SupportsToolsListChanged() bool {
 }
 
 func (m *MockMCP) Disconnect() error {
-	m.connected = false
+	m.connected.Store(false)
 	return nil
 }
 
-func (m *MockMCP) ListTools(_ context.Context, _ mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+func (m *MockMCP) ListTools(ctx context.Context, _ mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+	if m.listToolsDelay > 0 {
+		select {
+		case <-time.After(m.listToolsDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if m.listToolsErr != nil {
 		return nil, m.listToolsErr
 	}
 	return &mcp.ListToolsResult{Tools: m.tools}, nil
 }
 
-func (m *MockMCP) OnNotification(_ func(notification mcp.JSONRPCNotification)) {}
+func (m *MockMCP) OnNotification(handler func(notification mcp.JSONRPCNotification)) {
+	m.notificationHandler = handler
+}
 
 func (m *MockMCP) OnConnectionLost(_ func(err error)) {}
 
@@ -426,13 +438,15 @@ func TestMCPManager_Stop_Idempotent(t *testing.T) {
 	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
 	require.NoError(t, err)
 
+	active := manager.Start(context.Background())
+
 	// calling Stop multiple times should not panic
-	manager.Stop()
-	manager.Stop()
-	manager.Stop()
+	active.Stop()
+	active.Stop()
+	active.Stop()
 
 	// verify manager state after stop
-	assert.False(t, mock.connected, "mock should be disconnected after stop")
+	assert.False(t, mock.connected.Load(), "mock should be disconnected after stop")
 }
 
 func TestMCPManager_manage_ConnectError(t *testing.T) {
@@ -1016,4 +1030,110 @@ func TestMCPManager_NewUpstreamMCPManager_nilGateway(t *testing.T) {
 	_, err := NewUpstreamMCPManager(mock, nil, logger, 0, mcpv1alpha1.InvalidToolPolicyFilterOut)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "gateway server is required")
+}
+
+func TestMCPManager_EventChannel_NotificationRoutesThrough(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	mock := newMockMCP("test-server", "test_")
+	mock.tools = []mcp.Tool{validTool("tool1")}
+	mock.hasToolsCap = true
+	gateway := NewMockGatewayServer()
+	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go manager.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return len(gateway.ListTools()) == 1
+	}, time.Second, 10*time.Millisecond, "initial tools should be added")
+
+	// simulate upstream adding a tool
+	mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
+
+	// fire notification through the captured callback
+	require.NotNil(t, mock.notificationHandler, "notification handler should be registered")
+	mock.notificationHandler(mcp.JSONRPCNotification{
+		Notification: mcp.Notification{Method: notificationToolsListChanged},
+	})
+
+	require.Eventually(t, func() bool {
+		tools := gateway.ListTools()
+		_, has := tools["test_tool2"]
+		return len(tools) == 2 && has
+	}, time.Second, 10*time.Millisecond, "notification should trigger tool sync")
+}
+
+// verifies GetManagedTools/GetServedManagedTool don't race with manage() under -race.
+func TestMCPManager_ConcurrentReadsDuringManage(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	mock := newMockMCP("test-server", "test_")
+	mock.hasToolsCap = false
+	gateway := newMockToolsAdderDeleter()
+	manager, err := NewUpstreamMCPManager(mock, gateway, logger, 0, mcpv1alpha1.InvalidToolPolicyFilterOut)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	const readers = 10
+	const iterations = 100
+
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				tools := manager.GetManagedTools()
+				n := len(tools)
+				assert.True(t, n == 0 || n == 1 || n == 2, "unexpected tool count: %d", n)
+				_ = manager.GetServedManagedTool("test_tool1")
+			}
+		}()
+	}
+
+	for i := range iterations {
+		if i%2 == 0 {
+			mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
+		} else {
+			mock.tools = []mcp.Tool{validTool("tool1")}
+		}
+		manager.manage(ctx, eventTypeTimer)
+	}
+
+	wg.Wait()
+	tools := manager.GetManagedTools()
+	assert.NotEmpty(t, tools, "tools should be present after concurrent access")
+}
+
+// TestMCPManager_StopDuringManage starts the event loop, triggers a manage()
+// cycle via the events channel (with a slow ListTools), then calls Stop() while
+// manage() is in-flight. Verifies the shutdown path completes without deadlock.
+func TestMCPManager_StopDuringManage(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	mock := newMockMCP("race-server", "race_")
+	mock.tools = []mcp.Tool{validTool("tool1"), validTool("tool2")}
+	mock.hasToolsCap = false
+	// slow down ListTools so manage() is mid-flight when Stop() fires
+	mock.listToolsDelay = 100 * time.Millisecond
+	gateway := NewMockGatewayServer()
+	manager, err := NewUpstreamMCPManager(mock, gateway, logger, time.Hour, mcpv1alpha1.InvalidToolPolicyFilterOut)
+	require.NoError(t, err)
+
+	active := manager.Start(context.Background())
+	// let Start complete its initial manage() call
+	time.Sleep(200 * time.Millisecond)
+
+	// trigger another manage() on the event loop via the events channel;
+	// ListTools will block for 100ms giving us time to call Stop()
+	manager.events <- eventTypeNotification
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Stop() cancels the context; the event loop will finish the in-flight
+	// manage(), then select ctx.Done() and run removeAllTools
+	active.Stop()
+
+	assert.False(t, mock.connected.Load(), "mock should be disconnected after stop")
 }

@@ -134,7 +134,7 @@ func (broker *mcpBrokerImpl) parseAuthorizedCapabilitiesJWT(headerValues []strin
 	return capabilities, nil
 }
 
-func (broker *mcpBrokerImpl) findServerByName(name string) *upstream.MCPManager {
+func (broker *mcpBrokerImpl) findServerByName(name string) upstream.ActiveMCPServer {
 	for _, upstream := range broker.mcpServers {
 		if upstream.MCPName() == name {
 			return upstream
@@ -163,7 +163,7 @@ func (broker *mcpBrokerImpl) filterToolsByServerMap(allowedTools map[string][]st
 			broker.logger.Debug("checking access", "tool", tool.Name, "against", toolNames)
 			if slices.Contains(toolNames, tool.Name) {
 				broker.logger.Debug("access granted", "tool", tool.Name)
-				tool.Name = fmt.Sprintf("%s%s", upstream.MCP.GetPrefix(), tool.Name)
+				tool.Name = fmt.Sprintf("%s%s", upstream.Config().Prefix, tool.Name)
 				filtered = append(filtered, tool)
 			}
 		}

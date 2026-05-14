@@ -192,6 +192,10 @@ Test servers in `config/test-servers/`:
 - **Conformance Server**: Typescript SDK conformance test server
 - **Custom Response Server**: Tests custom response handling
 
+## Concurrency
+
+Before using a mutex to protect memory access, consider whether golang channels are a better solution. Favour the principle of sharing memory by communicating rather than communicating via shared memory.
+
 ## Performance
 
 Broker and router are hot paths. Avoid allocations in per-request code.
