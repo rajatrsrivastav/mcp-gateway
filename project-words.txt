@@ -407,3 +407,5 @@ SIEMs
 GHSA
 hrpp
 deadbeefcafebabe
+myprompt
+promptname
