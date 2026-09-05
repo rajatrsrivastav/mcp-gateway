@@ -2054,9 +2054,9 @@ func TestHTTPRouteNeedsUpdate(t *testing.T) {
 			name: "user-added label does not trigger update",
 			modify: func(r *gatewayv1.HTTPRoute) {
 				r.Labels = map[string]string{
-					labelAppName:      brokerRouterName,
-					labelManagedBy:    labelManagedByValue,
-					"team":            "platform",
+					labelAppName:   brokerRouterName,
+					labelManagedBy: labelManagedByValue,
+					"team":         "platform",
 				}
 			},
 			wantUpdate: false,
